@@ -14,13 +14,14 @@ import org.springframework.security.config.annotation.authentication.configurati
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
-import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -42,62 +43,102 @@ public class SecurityConfig {
     @Value("${app.cors.allowed-origins}")
     private String allowedOrigins;
 
+    // ===============================
+    // SECURITY FILTER
+    // ===============================
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         return http
                 .csrf(AbstractHttpConfigurer::disable)
-                .cors(c -> c.configurationSource(corsSource()))
+
+                // ✅ ENABLE CORS
+                .cors(cors -> cors.configurationSource(corsSource()))
+
                 .exceptionHandling(e -> e.authenticationEntryPoint(entryPoint))
+
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(a -> a
+
+                .authorizeHttpRequests(auth -> auth
+                        // ✅ VERY IMPORTANT (Preflight fix)
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+
                         .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/api/jobs/public/**").permitAll()
                         .requestMatchers("/api/testimonials/public").permitAll()
                         .requestMatchers("/api/contact").permitAll()
+
                         .requestMatchers("/api/admin/**").hasRole("ADMIN")
                         .requestMatchers("/api/user/**").hasAnyRole("USER", "ADMIN")
+
                         .anyRequest().authenticated()
                 )
+
                 .authenticationProvider(authProvider())
+
+                // ✅ JWT FILTER
                 .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+
                 .build();
     }
 
+    // ===============================
+    // CORS CONFIG (FINAL FIX 🔥)
+    // ===============================
     @Bean
     public CorsConfigurationSource corsSource() {
         CorsConfiguration cfg = new CorsConfiguration();
 
-        // ✅ FIX: trim() each origin to avoid whitespace issues
+        // 👉 Read from ENV variable
         List<String> origins = Arrays.stream(allowedOrigins.split(","))
                 .map(String::trim)
                 .collect(Collectors.toList());
 
-        cfg.setAllowedOriginPatterns(origins);
-        cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
+        // 🔥 MOST IMPORTANT FIX
+        cfg.setAllowedOrigins(origins);
+
+        cfg.setAllowedMethods(List.of(
+                "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"
+        ));
+
         cfg.setAllowedHeaders(List.of("*"));
-        cfg.setExposedHeaders(List.of("Authorization"));  // ✅ expose JWT header
+
+        cfg.setExposedHeaders(List.of("Authorization"));
+
         cfg.setAllowCredentials(true);
-        cfg.setMaxAge(3600L); // ✅ cache preflight for 1 hour
+
+        cfg.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource src = new UrlBasedCorsConfigurationSource();
         src.registerCorsConfiguration("/**", cfg);
+
+        // 👉 Debug (optional)
+        System.out.println("CORS Allowed Origins: " + origins);
+
         return src;
     }
 
+    // ===============================
+    // AUTH PROVIDER
+    // ===============================
     @Bean
     public AuthenticationProvider authProvider() {
-        DaoAuthenticationProvider p = new DaoAuthenticationProvider();
-        p.setUserDetailsService(userDetailsService);
-        p.setPasswordEncoder(passwordEncoder());
-        return p;
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setUserDetailsService(userDetailsService);
+        provider.setPasswordEncoder(passwordEncoder());
+        return provider;
     }
 
+    // ===============================
+    // AUTH MANAGER
+    // ===============================
     @Bean
-    public AuthenticationManager authManager(AuthenticationConfiguration cfg) throws Exception {
-        return cfg.getAuthenticationManager();
+    public AuthenticationManager authManager(AuthenticationConfiguration config) throws Exception {
+        return config.getAuthenticationManager();
     }
 
+    // ===============================
+    // PASSWORD ENCODER
+    // ===============================
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
